@@ -9,6 +9,7 @@ function App() {
   const [results, setResults] = useState(null);
   const [history, setHistory] = useState([]);
   const [error, setError] = useState('');
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Конфигурация API
   const API_ENDPOINT = 'https://n4lztxcjn6.execute-api.eu-north-1.amazonaws.com/prod';
@@ -23,6 +24,11 @@ function App() {
     };
     reader.readAsDataURL(file);
   }, [file]);
+
+  // Загрузка истории при монтировании компонента
+  useEffect(() => {
+    loadHistory();
+  }, []);
 
   // Загрузка и анализ изображения
   const handleUpload = async () => {
@@ -56,8 +62,8 @@ function App() {
         imageUrl: `https://image-analys.s3.amazonaws.com/${filename}`
       });
 
-      // 4. Обновляем историю
-      loadHistory();
+      // 4. Обновляем историю после успешного анализа
+      await loadHistory();
     } catch (err) {
       console.error('Ошибка:', err);
       setError('Произошла ошибка при обработке изображения');
@@ -68,17 +74,27 @@ function App() {
 
   // Загрузка истории анализов
   const loadHistory = async () => {
+    setHistoryLoading(true);
     try {
       const response = await axios.get(`${API_ENDPOINT}/history`);
-      setHistory(response.data);
+      // Сортируем по дате (новые сначала)
+      const sortedHistory = response.data.sort((a, b) => 
+        new Date(b.timestamp) - new Date(a.timestamp)
+      );
+      setHistory(sortedHistory);
     } catch (err) {
       console.error('Ошибка загрузки истории:', err);
+      setError('Не удалось загрузить историю анализов');
+    } finally {
+      setHistoryLoading(false);
     }
   };
 
   // Форматирование даты
   const formatDate = (isoString) => {
-    return new Date(isoString).toLocaleString();
+    if (!isoString) return 'Неизвестно';
+    const date = new Date(isoString);
+    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
   };
 
   return (
@@ -127,7 +143,105 @@ function App() {
             </div>
           </section>
         )}
+
+        {/* Результаты анализа */}
+        {results && (
+          <section className="results-section">
+            <h2>Результаты анализа</h2>
+            
+            <div className="result-item">
+              <h3>Описание изображения:</h3>
+              <p>{results.description || 'Описание недоступно'}</p>
+            </div>
+
+            {results.moderation && results.moderation.length > 0 ? (
+              <div className="result-item warning">
+                <h3>⚠️ Обнаружен потенциально нежелательный контент:</h3>
+                <ul>
+                  {results.moderation.map((label, index) => (
+                    <li key={index}>{label}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <div className="result-item success">
+                <h3>✓ Контент безопасен</h3>
+                <p>Не обнаружено неприемлемых элементов</p>
+              </div>
+            )}
+
+            {results.imageUrl && (
+              <div className="result-item">
+                <h3>Ссылка на изображение:</h3>
+                <a 
+                  href={results.imageUrl} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="image-link"
+                >
+                  {results.imageUrl}
+                </a>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* История анализов */}
+        <section className="history-section">
+          <div className="history-header">
+            <h2>История анализов</h2>
+            <button 
+              onClick={loadHistory} 
+              disabled={historyLoading}
+              className="refresh-button"
+            >
+              {historyLoading ? 'Загрузка...' : 'Обновить'}
+            </button>
+          </div>
+
+          {historyLoading ? (
+            <p>Загрузка истории...</p>
+          ) : history.length > 0 ? (
+            <div className="history-grid">
+              {history.map((item) => (
+                <div key={item.imageId} className="history-card">
+                  <div className="card-header">
+                    <h3>{item.imageId.split('/').pop().split('_')[1] || item.imageId}</h3>
+                    <span className="card-date">{formatDate(item.timestamp)}</span>
+                  </div>
+                  
+                  {item.imageUrl && (
+                    <img 
+                      src={item.imageUrl} 
+                      alt="Из истории" 
+                      className="history-image"
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                      }}
+                    />
+                  )}
+
+                  <div className="card-labels">
+                    <strong>Объекты:</strong> 
+                    {item.labels?.join(', ') || 'не обнаружены'}
+                  </div>
+
+                  {item.moderationLabels?.length > 0 && (
+                    <div className="card-moderation">
+                      <strong>Проблемы:</strong> 
+                      {item.moderationLabels.join(', ')}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p>Нет данных об анализах</p>
+          )}
+        </section>
       </main>
+
+      
     </div>
   );
 }
