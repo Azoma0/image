@@ -1,13 +1,186 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vite + React</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Image Analyzer SPA</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; background: #f0f2f5; }
+  h1, h2 { text-align: center; color: #222; }
+  input[type="file"] { width: 100%; padding: 0.4rem; margin: 1rem 0; }
+  button { width: 100%; padding: 0.6rem; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+  button:disabled { background: #7aa7e9; cursor: not-allowed; }
+  .result, .history { background: white; padding: 1rem; margin-top: 1.5rem; border-radius: 6px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
+  img { max-width: 100%; border-radius: 6px; margin-bottom: 1rem; }
+  .labels span, .moderation span { display: inline-block; background: #e1e7f5; color: #2c3e50; padding: 0.2rem 0.6rem; border-radius: 12px; margin: 0 0.3rem 0.3rem 0; font-size: 0.9rem; }
+  .moderation span { background: #f8d7da; color: #842029; }
+  .error { color: red; margin-top: 1rem; font-weight: bold; }
+  .history-item { border-bottom: 1px solid #ddd; padding: 0.5rem 0; }
+  .history-item:last-child { border-bottom: none; }
+  .timestamp { font-size: 0.8rem; color: #666; margin-top: 0.3rem; }
+</style>
+</head>
+<body>
+
+<h1>Image Analyzer</h1>
+
+<input type="file" id="fileInput" accept="image/*" />
+<button id="uploadBtn" disabled>Загрузить и проанализировать</button>
+
+<div class="result" id="result" style="display:none;">
+  <h2>Результат анализа</h2>
+  <img id="preview" alt="Uploaded Image" />
+  <div><strong>Labels:</strong> <div class="labels" id="labels"></div></div>
+  <div><strong>Moderation:</strong> <div class="moderation" id="moderation"></div></div>
+  <div class="timestamp" id="timestamp"></div>
+</div>
+
+<h2>История анализов</h2>
+<div class="history" id="history">Загрузка...</div>
+
+<div class="error" id="error" style="display:none;"></div>
+
+<script>
+  const API_BASE_URL = 'https://y12iixlqqg.execute-api.eu-west-1.amazonaws.com/prod-3';
+  const S3_BUCKET = 'aiimageanalysebucket';
+
+  const fileInput = document.getElementById('fileInput');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const resultDiv = document.getElementById('result');
+  const previewImg = document.getElementById('preview');
+  const labelsDiv = document.getElementById('labels');
+  const moderationDiv = document.getElementById('moderation');
+  const timestampDiv = document.getElementById('timestamp');
+  const historyDiv = document.getElementById('history');
+  const errorDiv = document.getElementById('error');
+
+  let selectedFile = null;
+
+  fileInput.addEventListener('change', () => {
+    selectedFile = fileInput.files[0];
+    uploadBtn.disabled = !selectedFile;
+    errorDiv.style.display = 'none';
+  });
+
+  async function apiFetch(path, options) {
+    const res = await fetch(API_BASE_URL + path, options);
+    if (!res.ok) {
+      let msg = `Ошибка: ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data.error) msg = data.error;
+      } catch {}
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
+  async function uploadFile(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiFetch('/generateuploadurl', { method: 'POST', body: formData });
+  }
+
+  async function analyzeImage(key) {
+    return apiFetch('/analyse-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+    });
+  }
+
+  // Проверка, что изображение реально доступно (не заблокировано CORS/policy)
+  function checkImageAccessible(url) {
+    return new Promise((resolve) => {
+      const img = new window.Image();
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = url;
+    });
+  }
+
+  async function loadHistory() {
+    historyDiv.textContent = 'Загрузка...';
+    try {
+      let items = await apiFetch('/get-history');
+      // Если это объект с полем body (API Gateway Proxy), парсим вручную
+      if (items.body) {
+        items = JSON.parse(items.body);
+      }
+      if (!Array.isArray(items) || !items.length) {
+        historyDiv.textContent = 'История пуста';
+        return;
+      }
+      // Цикл по каждому анализу
+      historyDiv.innerHTML = '';
+      for (const item of items) {
+        const key = item.key || item.ImageID || '';
+        const labels = (item.labels || item.Labels || []).map(l => `${l.Name} (${l.Confidence.toFixed(1)}%)`).join(', ') || 'Нет';
+        const moderation = (item.moderation || item.Moderation || []).map(m => `${m.Name} (${m.Confidence.toFixed(1)}%)`).join(', ') || 'Нет';
+        const timestamp = item.timestamp || item.Timestamp || '';
+        // Если ключ есть и это картинка — показываем превью (и проверяем доступность)
+        let imgHtml = '';
+        if (key && (key.endsWith('.jpg') || key.endsWith('.jpeg') || key.endsWith('.png') || key.endsWith('.gif'))) {
+          const imgUrl = `https://${S3_BUCKET}.s3.amazonaws.com/${key}`;
+          // Проверяем доступность картинки (чтобы не было блокировки)
+          // Можно убрать await, если не хочешь задержку, но тогда просто вставляй <img>
+          imgHtml = `<img src="${imgUrl}" alt="History Image" onerror="this.style.display='none';" />`;
+        }
+        historyDiv.innerHTML += `
+          <div class="history-item">
+            ${imgHtml}
+            <div><strong>Изображение:</strong> ${key}</div>
+            <div><strong>Метки:</strong> ${labels}</div>
+            <div><strong>Модерация:</strong> ${moderation}</div>
+            <div class="timestamp">${timestamp ? new Date(timestamp).toLocaleString() : ''}</div>
+          </div>
+        `;
+      }
+    } catch (e) {
+      historyDiv.textContent = 'Не удалось загрузить историю';
+    }
+  }
+
+  // Загружаем историю при старте страницы
+  loadHistory();
+
+  // Загружаем историю после анализа нового изображения
+  uploadBtn.addEventListener('click', async () => {
+    errorDiv.style.display = 'none';
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = 'Загрузка...';
+    try {
+      const uploadResp = await uploadFile(selectedFile);
+      const key = uploadResp.key || uploadResp.uploadKey;
+      if (!key) throw new Error('Не удалось получить ключ загруженного файла');
+      const analysis = await analyzeImage(key);
+
+      previewImg.src = `https://${S3_BUCKET}.s3.amazonaws.com/${key}`;
+      labelsDiv.innerHTML = (analysis.labels || analysis.Labels || []).map(l =>
+        `<span>${l.Name} (${l.Confidence.toFixed(1)}%)</span>`
+      ).join('');
+      moderationDiv.innerHTML = (analysis.moderation || analysis.Moderation || []).length
+        ? (analysis.moderation || analysis.Moderation).map(m =>
+          `<span style="background:#f8d7da;color:#842029;padding:0.2rem 0.6rem;border-radius:12px;margin-right:4px;">${m.Name} (${m.Confidence.toFixed(1)}%)</span>`
+        ).join('')
+        : 'Нет';
+      timestampDiv.textContent = `Анализ выполнен: ${new Date(analysis.timestamp || analysis.Timestamp).toLocaleString()}`;
+
+      resultDiv.style.display = 'block';
+
+      await loadHistory(); // обновляем историю после анализа
+    } catch (e) {
+      errorDiv.textContent = e.message;
+      errorDiv.style.display = 'block';
+    } finally {
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = 'Загрузить и проанализировать';
+    }
+  });
+
+  // (Опционально) Автоматическое обновление истории раз в 30 секунд:
+  setInterval(loadHistory, 30000);
+</script>
+
+</body>
 </html>
