@@ -35,7 +35,7 @@
   <div class="timestamp" id="timestamp"></div>
 </div>
 
-<h2>История анализов</h2>
+
 <div class="history" id="history">Загрузка...</div>
 
 <div class="error" id="error" style="display:none;"></div>
@@ -99,51 +99,7 @@
     });
   }
 
-  async function loadHistory() {
-    historyDiv.textContent = 'Загрузка...';
-    try {
-      let items = await apiFetch('/get-history');
-      // Если это объект с полем body (API Gateway Proxy), парсим вручную
-      if (items.body) {
-        items = JSON.parse(items.body);
-      }
-      if (!Array.isArray(items) || !items.length) {
-        historyDiv.textContent = 'История пуста';
-        return;
-      }
-      // Цикл по каждому анализу
-      historyDiv.innerHTML = '';
-      for (const item of items) {
-        const key = item.key || item.ImageID || '';
-        const labels = (item.labels || item.Labels || []).map(l => `${l.Name} (${l.Confidence.toFixed(1)}%)`).join(', ') || 'Нет';
-        const moderation = (item.moderation || item.Moderation || []).map(m => `${m.Name} (${m.Confidence.toFixed(1)}%)`).join(', ') || 'Нет';
-        const timestamp = item.timestamp || item.Timestamp || '';
-        // Если ключ есть и это картинка — показываем превью (и проверяем доступность)
-        let imgHtml = '';
-        if (key && (key.endsWith('.jpg') || key.endsWith('.jpeg') || key.endsWith('.png') || key.endsWith('.gif'))) {
-          const imgUrl = `https://${S3_BUCKET}.s3.amazonaws.com/${key}`;
-          // Проверяем доступность картинки (чтобы не было блокировки)
-          // Можно убрать await, если не хочешь задержку, но тогда просто вставляй <img>
-          imgHtml = `<img src="${imgUrl}" alt="History Image" onerror="this.style.display='none';" />`;
-        }
-        historyDiv.innerHTML += `
-          <div class="history-item">
-            ${imgHtml}
-            <div><strong>Изображение:</strong> ${key}</div>
-            <div><strong>Метки:</strong> ${labels}</div>
-            <div><strong>Модерация:</strong> ${moderation}</div>
-            <div class="timestamp">${timestamp ? new Date(timestamp).toLocaleString() : ''}</div>
-          </div>
-        `;
-      }
-    } catch (e) {
-      historyDiv.textContent = 'Не удалось загрузить историю';
-    }
-  }
-
-  // Загружаем историю при старте страницы
-  loadHistory();
-
+   
   // Загружаем историю после анализа нового изображения
   uploadBtn.addEventListener('click', async () => {
     errorDiv.style.display = 'none';
